@@ -1,0 +1,27 @@
+{
+  "asset_cache_root": "/root/.cache/fairseq2/assets",
+  "checkpoint": {
+    "files": [
+      {
+        "bytes": "31220520831",
+        "path": "be8b45a4444380016fa2f991/omniASR-LLM-Unlimited-7B-v2.pt",
+        "sha256": "600199f8be430aed4e43b6b1c7cf70fd83d471fac574c61c95b6bce90c47b68e"
+      }
+    ]
+  },
+  "checksum_algorithm": "sha256",
+  "generated_from_modal_app": "voice-code-bench-omniasr",
+  "model_card": "omniASR_LLM_Unlimited_7B_v2",
+  "runtime_package": "omnilingual-asr",
+  "runtime_revision": "0.2.0",
+  "schema_version": 1,
+  "tokenizer": {
+    "files": [
+      {
+        "bytes": "91481",
+        "path": "e7be1a6acb8f76fdbca19dce/omniASR_tokenizer_written_v2.model",
+        "sha256": "8aa11a1092142ef472537476ef6e76541123e2f0d789b79f3ebd119008240b1e"
+      }
+    ]
+  }
+}

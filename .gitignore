@@ -1,0 +1,25 @@
+# Project-private inputs
+internal/
+scripts/.secret
+
+# Generated benchmark outputs
+baselines/scores/
+runs/
+
+# Python
+__pycache__/
+.pytest_cache/
+.venv/
+*.egg-info/
+
+# Local agent workspace
+codex-progress.log
+plan/
+sketch/
+
+# Owner-managed deployment infrastructure
+/modal_apps/
+
+/data/audio/
+
+/baselines/results.csv

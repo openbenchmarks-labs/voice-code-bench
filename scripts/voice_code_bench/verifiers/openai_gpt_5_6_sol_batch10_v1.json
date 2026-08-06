@@ -1,0 +1,77 @@
+{
+  "schema_version": 1,
+  "id": "openai_gpt_5_6_sol_batch10_v1",
+  "provider": "openai",
+  "model": "gpt-5.6-sol",
+  "endpoint_or_api": "https://api.openai.com/v1/chat/completions",
+  "timeout_seconds": 180.0,
+  "transport": "openai_batch",
+  "datapoints_per_request": 10,
+  "completion_window": "24h",
+  "request_options": {
+    "reasoning_effort": "medium"
+  },
+  "system_prompt": [
+    "You verify whether each gold Voice Code Bench entity is present in a raw speech-to-text transcript.",
+    "Return only valid JSON matching the provided schema.",
+    "Check every datapoint independently and return exactly one result with the same datapoint_id for every input datapoint.",
+    "Within each datapoint, check every target entity independently and return one entity result for each target_index.",
+    "Use only that datapoint's STT transcript. Use acoustic as the expected spoken form and canonical as the exact value to recover.",
+    "Mark present true only when enough evidence exists to recover the exact canonical value. Casing, punctuation, spacing, and formatting differences are acceptable only when the same value remains recoverable.",
+    "Reject wrong, missing, extra, or substituted letters, digits, separators, units, dates, times, amounts, or words that change the value.",
+    "Copy datapoint_id, target_index, type, and canonical exactly. For present entities, evidence must be a non-empty exact transcript substring.",
+    "For absent entities, use the closest corrupted substring when available, otherwise an empty string. Always include a short non-empty reason.",
+    "Do not add datapoints or entities and do not explain outside the JSON."
+  ],
+  "response_format": {
+    "type": "json_schema",
+    "json_schema": {
+      "name": "voice_code_bench_grouped_entity_matches_v1",
+      "strict": true,
+      "schema": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["datapoints"],
+        "properties": {
+          "datapoints": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["datapoint_id", "entities"],
+              "properties": {
+                "datapoint_id": {"type": "string"},
+                "entities": {
+                  "type": "array",
+                  "items": {
+                    "type": "object",
+                    "additionalProperties": false,
+                    "required": ["target_index", "type", "canonical", "present", "evidence", "reason"],
+                    "properties": {
+                      "target_index": {"type": "integer"},
+                      "type": {
+                        "type": "string",
+                        "enum": [
+                          "email_address", "phone_number", "phone_extension", "person_or_team_name",
+                          "postal_address", "url", "ip_address", "port_number", "command", "cli_flag",
+                          "file_path", "environment_variable", "code_symbol", "version", "reference_id",
+                          "product_code", "account_or_record_number", "currency_amount", "percentage",
+                          "measurement", "plain_number", "date", "time", "acronym_or_initialism",
+                          "spelled_sequence", "domain_term"
+                        ]
+                      },
+                      "canonical": {"type": "string"},
+                      "present": {"type": "boolean"},
+                      "evidence": {"type": "string"},
+                      "reason": {"type": "string"}
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+}

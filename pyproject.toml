@@ -1,0 +1,54 @@
+[build-system]
+requires = ["setuptools>=69", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "voice-code-bench"
+version = "0.1.0"
+description = "VoiceCodeBench transcription, entity extraction, and scoring CLI"
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "MIT" }
+dependencies = []
+
+[project.optional-dependencies]
+providers = [
+    "google-auth[requests]>=2.29.0",
+    "google-cloud-speech>=2.26.0",
+    "amazon-transcribe>=0.6.2",
+    "websocket-client>=1.8.0",
+]
+figures = [
+    "matplotlib>=3.8.0",
+]
+dev = [
+    "pytest>=7.4.0",
+    "google-auth[requests]>=2.29.0",
+    "google-cloud-speech>=2.26.0",
+    "amazon-transcribe>=0.6.2",
+    "websocket-client>=1.8.0",
+    "matplotlib>=3.8.0",
+]
+
+[project.scripts]
+vcb-run = "voice_code_bench.commands.run:run_benchmark_main"
+vcb-transcribe = "voice_code_bench.commands.transcribe:transcribe_main"
+vcb-extract-entities = "voice_code_bench.commands.extract_entities:extract_entities_main"
+vcb-batch-verify = "voice_code_bench.commands.batch_verify:batch_verify_main"
+vcb-score-entities = "voice_code_bench.commands.score:score_entities_main"
+vcb-score-wer = "voice_code_bench.commands.score:score_wer_main"
+vcb-make-figures = "voice_code_bench.figures:main"
+vcb-make-paper-figures = "voice_code_bench.figures:main"
+
+[tool.setuptools]
+package-dir = { "" = "scripts" }
+
+[tool.setuptools.packages.find]
+where = ["scripts"]
+
+[tool.setuptools.package-data]
+voice_code_bench = ["verifiers/*.json"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["scripts"]
