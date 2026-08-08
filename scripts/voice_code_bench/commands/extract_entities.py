@@ -33,6 +33,7 @@ from voice_code_bench.verifier import (
     VerifierConfig,
     verifier_config_for_args,
     verify_entity_matches,
+    verify_grouped_entity_matches,
 )
 
 
@@ -47,7 +48,12 @@ def extract_entities_parser() -> argparse.ArgumentParser:
     parser.add_argument("--verifier-mode", choices=VERIFIER_CACHE_MODES, default="live")
     parser.add_argument("--secret-path", type=Path, default=None)
     parser.add_argument("--limit", type=int, default=None)
-    parser.add_argument("--concurrency", type=int, default=4)
+    parser.add_argument(
+        "--concurrency",
+        type=int,
+        default=4,
+        help="Datapoint concurrency, or global request concurrency for grouped synchronous verifiers.",
+    )
     parser.add_argument("--model-concurrency", type=int, default=None, help="Defaults to the transcript model count.")
     parser.add_argument("--resume", action="store_true")
     return parser
@@ -72,11 +78,31 @@ def run_extract_entities(args: argparse.Namespace) -> list[Path]:
     transcript_files = row_data_files_by_model(transcripts_dir, "transcripts")
     if not transcript_files:
         raise RuntimeError(f"No transcript JSON files found in {transcripts_dir}.")
-    model_concurrency = resolve_concurrency(args.model_concurrency, len(transcript_files), "--model-concurrency")
     verifier_config = verifier_config_for_args(args.verifier_id)
     verifier_cache = VerifierCache(args.verifier_cache) if args.verifier_cache is not None else None
     if args.verifier_mode != "live" and verifier_cache is None:
         raise ValueError(f"--verifier-mode={args.verifier_mode} requires --verifier-cache.")
+    if verifier_config.datapoints_per_request > 1:
+        if verifier_config.transport != "sync":
+            raise ValueError(
+                f"Verifier {verifier_config.id} uses transport={verifier_config.transport}; "
+                "use vcb-batch-verify for asynchronous Batch API verification."
+            )
+        if verifier_cache is not None or args.verifier_mode != "live":
+            raise ValueError("Grouped synchronous verification currently supports only --verifier-mode=live.")
+        return extract_grouped_models(
+            output_dir,
+            transcript_files,
+            datapoints,
+            datapoint_by_audio_id,
+            order,
+            verifier_config,
+            secrets,
+            args.concurrency,
+            args.resume,
+        )
+
+    model_concurrency = resolve_concurrency(args.model_concurrency, len(transcript_files), "--model-concurrency")
 
     def extract_one_model(item: tuple[str, Path]) -> Path:
         model_id, transcript_path = item
@@ -102,6 +128,78 @@ def run_extract_entities(args: argparse.Namespace) -> list[Path]:
         item_label=lambda item: item[0],
         finished_message=lambda model_id, path: f"finished_entities stt_model={model_id} path={path}",
     )
+
+
+def extract_grouped_models(
+    output_dir: Path,
+    transcript_files: list[tuple[str, Path]],
+    datapoints: list[MetadataDatapoint],
+    datapoint_by_audio_id: dict[str, MetadataDatapoint],
+    order: dict[str, int],
+    verifier_config: VerifierConfig,
+    secrets: dict[str, str],
+    concurrency: int,
+    resume: bool,
+) -> list[Path]:
+    group_size = verifier_config.datapoints_per_request
+    states: dict[str, dict[str, Any]] = {}
+    jobs: list[tuple[str, list[TranscriptRow]]] = []
+    for model_id, transcript_path in transcript_files:
+        transcripts = read_complete_rows(transcript_path, datapoints, artifact_name="transcript")
+        path = model_artifact_path(output_dir, model_id, "entity_matches")
+        rows_by_audio_id = resume_rows_by_audio_id(path, resume=resume, artifact_name="entity-match")
+        pending = [row for row in transcripts if row["audio_id"] not in rows_by_audio_id]
+        states[model_id] = {
+            "path": path,
+            "rows": rows_by_audio_id,
+            "run_metadata": entity_match_run_metadata(
+                read_json_run_metadata(transcript_path),
+                verifier_config,
+                "live",
+            ),
+        }
+        for start in range(0, len(pending), group_size):
+            jobs.append((model_id, pending[start : start + group_size]))
+
+    with ThreadPoolExecutor(max_workers=concurrency) as executor:
+        futures = {
+            executor.submit(
+                verify_grouped_entity_matches,
+                [datapoint_by_audio_id[row["audio_id"]] for row in group],
+                group,
+                verifier_config,
+                secrets,
+            ): (model_id, group)
+            for model_id, group in jobs
+        }
+        for future in as_completed(futures):
+            model_id, group = futures[future]
+            matches_by_id = future.result()
+            state = states[model_id]
+            for transcript_row in group:
+                audio_id = transcript_row["audio_id"]
+                row: EntityMatchRow = {
+                    "audio_id": audio_id,
+                    "model_transcript": transcript_row["model_transcript"],
+                    "entity_matches": matches_by_id[audio_id],
+                }
+                if "metadata" in transcript_row:
+                    row["metadata"] = transcript_row["metadata"]
+                state["rows"][audio_id] = row
+            write_entity_match_rows(state["path"], state["rows"], order, state["run_metadata"])
+            print(
+                f"checked_entities_group stt_model={model_id} datapoints={len(group)} "
+                f"first_audio_id={group[0]['audio_id']}",
+                flush=True,
+            )
+
+    paths: list[Path] = []
+    for model_id, _transcript_path in transcript_files:
+        state = states[model_id]
+        write_entity_match_rows(state["path"], state["rows"], order, state["run_metadata"])
+        print(f"finished_entities stt_model={model_id} path={state['path']}", flush=True)
+        paths.append(state["path"])
+    return paths
 
 
 def extract_model(
@@ -188,6 +286,9 @@ def entity_match_run_metadata(
         "endpoint_or_api": verifier_config.endpoint_or_api,
         "config_digest": verifier_config.digest,
         "cache_mode": verifier_mode,
+        "transport": verifier_config.transport,
+        "datapoints_per_request": verifier_config.datapoints_per_request,
+        "reasoning_effort": verifier_config.request_options.get("reasoning_effort"),
     }
     return run_metadata
 

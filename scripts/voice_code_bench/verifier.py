@@ -9,11 +9,12 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from .http import post_json
+from .http import HttpRequestError, post_json
 from .io import require_secret
 from .models import DEFAULT_VERIFIER_ID
 
 VERIFIER_CACHE_MODES = ("live", "replay", "live-fill")
+GROUPED_SYNC_MAX_ATTEMPTS = 3
 VERIFIER_CONFIG_DIR = Path(__file__).with_name("verifiers")
 VERIFIER_CACHE_SCHEMA_VERSION = 1
 
@@ -347,6 +348,102 @@ def build_openai_verify_request(config: VerifierConfig, datapoint: dict[str, Any
         if temperature is not None:
             request["temperature"] = temperature
     return request
+
+
+def build_grouped_verify_request(config: VerifierConfig, inputs: list[dict[str, Any]]) -> dict[str, Any]:
+    return {
+        "model": config.model,
+        **config.request_options,
+        "response_format": config.response_format,
+        "messages": [
+            {"role": "system", "content": config.system_prompt},
+            {"role": "user", "content": json.dumps({"datapoints": inputs}, ensure_ascii=False)},
+        ],
+    }
+
+
+def verify_grouped_entity_matches(
+    datapoints: list[dict[str, Any]],
+    transcript_rows: list[dict[str, Any]],
+    config: VerifierConfig,
+    secrets: dict[str, str],
+) -> dict[str, list[dict[str, Any]]]:
+    if config.provider != "openai" or config.transport != "sync":
+        raise ValueError(f"Verifier {config.id} is not a synchronous OpenAI verifier.")
+    expected_ids = [datapoint["audio_id"] for datapoint in datapoints]
+    if len(expected_ids) > config.datapoints_per_request:
+        raise ValueError(
+            f"Verifier {config.id} accepts at most {config.datapoints_per_request} datapoints per request."
+        )
+    transcript_by_id = {row["audio_id"]: row for row in transcript_rows}
+    inputs = [
+        verifier_input(datapoint, transcript_by_id[datapoint["audio_id"]]["model_transcript"])
+        for datapoint in datapoints
+    ]
+    last_error: Exception | None = None
+    for _attempt in range(1, GROUPED_SYNC_MAX_ATTEMPTS + 1):
+        try:
+            response = call_grouped_openai_verifier(config, inputs, secrets)
+            return parse_grouped_response(
+                response,
+                expected_ids,
+                {datapoint["audio_id"]: datapoint for datapoint in datapoints},
+            )
+        except (ValueError, HttpRequestError) as exc:
+            last_error = exc
+    assert last_error is not None
+    raise last_error
+
+
+def call_grouped_openai_verifier(
+    config: VerifierConfig,
+    inputs: list[dict[str, Any]],
+    secrets: dict[str, str],
+) -> dict[str, Any]:
+    response = post_json(
+        config.endpoint_or_api,
+        build_grouped_verify_request(config, inputs),
+        {"Authorization": f"Bearer {require_secret(secrets, 'OPENAI_API_KEY')}"},
+        timeout=config.timeout_seconds,
+    )
+    try:
+        content = response["choices"][0]["message"]["content"]
+    except (KeyError, IndexError, TypeError) as exc:
+        raise ValueError("OpenAI grouped verifier response did not include message content.") from exc
+    try:
+        parsed = json.loads(content)
+    except json.JSONDecodeError as exc:
+        raise ValueError("OpenAI grouped verifier returned invalid JSON.") from exc
+    if not isinstance(parsed, dict):
+        raise ValueError("OpenAI grouped verifier returned non-object JSON.")
+    return parsed
+
+
+def parse_grouped_response(
+    value: Any,
+    expected_ids: list[str],
+    datapoints_by_id: dict[str, dict[str, Any]],
+) -> dict[str, list[dict[str, Any]]]:
+    if not isinstance(value, dict) or not isinstance(value.get("datapoints"), list):
+        raise ValueError("Expected grouped verifier response with a datapoints array.")
+    expected = set(expected_ids)
+    found: dict[str, list[dict[str, Any]]] = {}
+    for item in value["datapoints"]:
+        if not isinstance(item, dict):
+            raise ValueError("Grouped verifier datapoint must be an object.")
+        datapoint_id = item.get("datapoint_id")
+        if not isinstance(datapoint_id, str) or datapoint_id not in expected:
+            raise ValueError(f"Unknown datapoint_id in grouped response: {datapoint_id!r}.")
+        if datapoint_id in found:
+            raise ValueError(f"Duplicate datapoint_id in grouped response: {datapoint_id}.")
+        found[datapoint_id] = parse_llm_entity_matches(
+            {"entities": item.get("entities")},
+            datapoints_by_id[datapoint_id]["entities"],
+        )
+    missing = [datapoint_id for datapoint_id in expected_ids if datapoint_id not in found]
+    if missing:
+        raise ValueError(f"Grouped verifier response omitted datapoint_id values: {missing}.")
+    return found
 
 
 def verifier_temperature(model: str) -> int | None:

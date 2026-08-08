@@ -16,6 +16,7 @@ OPENAI_REALTIME_CHANNELS = 1
 OPENAI_REALTIME_CHUNK_DURATION_SECONDS = 0.1
 OPENAI_REALTIME_DRAIN_TIMEOUT_SECONDS = 120.0
 OPENAI_REALTIME_RECV_POLL_TIMEOUT_SECONDS = 0.02
+OPENAI_REALTIME_SEND_TIMEOUT_SECONDS = 120.0
 
 
 def transcribe(audio_path: Path, stt_model: SttModelConfig, api_key: str) -> TranscriptionResult:
@@ -70,15 +71,16 @@ def _transcribe_streaming(audio_path: Path, stt_model: SttModelConfig, api_key: 
                 raise RuntimeError(f"OpenAI realtime transcription failed: {payload}")
             if event_type == "session.updated":
                 break
-        ws.settimeout(OPENAI_REALTIME_RECV_POLL_TIMEOUT_SECONDS if stt_model.options.get("stream_realtime") else 120)
+        receive_timeout = OPENAI_REALTIME_RECV_POLL_TIMEOUT_SECONDS if stt_model.options.get("stream_realtime") else 120.0
+        ws.settimeout(receive_timeout)
         for chunk in iter_audio_chunks(pcm_audio, max(1, chunk_size)):
-            ws.send(
-                json.dumps(
-                    {
-                        "type": "input_audio_buffer.append",
-                        "audio": base64.b64encode(chunk).decode("ascii"),
-                    }
-                )
+            _send_realtime_event(
+                ws,
+                {
+                    "type": "input_audio_buffer.append",
+                    "audio": base64.b64encode(chunk).decode("ascii"),
+                },
+                receive_timeout,
             )
             _drain_realtime_events_for_chunk_interval(
                 ws,
@@ -91,13 +93,13 @@ def _transcribe_streaming(audio_path: Path, stt_model: SttModelConfig, api_key: 
         if stt_model.options.get("turn_detection"):
             flush_seconds = float(stt_model.options.get("vad_flush_silence_seconds", 1.0))
             for chunk in iter_audio_chunks(b"\x00" * int(sample_rate * 2 * channels * flush_seconds), max(1, chunk_size)):
-                ws.send(
-                    json.dumps(
-                        {
-                            "type": "input_audio_buffer.append",
-                            "audio": base64.b64encode(chunk).decode("ascii"),
-                        }
-                    )
+                _send_realtime_event(
+                    ws,
+                    {
+                        "type": "input_audio_buffer.append",
+                        "audio": base64.b64encode(chunk).decode("ascii"),
+                    },
+                    receive_timeout,
                 )
                 _drain_realtime_events_for_chunk_interval(
                     ws,
@@ -108,7 +110,7 @@ def _transcribe_streaming(audio_path: Path, stt_model: SttModelConfig, api_key: 
                     delta_by_item_id,
                 )
         if not stt_model.options.get("turn_detection"):
-            ws.send(json.dumps({"type": "input_audio_buffer.commit"}))
+            _send_realtime_event(ws, {"type": "input_audio_buffer.commit"}, receive_timeout)
 
         ws.settimeout(1.0)
         deadline = time.monotonic() + _realtime_drain_timeout_seconds(audio_path)
@@ -135,6 +137,15 @@ def _transcribe_streaming(audio_path: Path, stt_model: SttModelConfig, api_key: 
     ]
     transcript = " ".join(part.strip() for part in transcript_parts if part.strip())
     return {"transcript": transcript}
+
+
+def _send_realtime_event(ws: Any, payload: dict[str, Any], receive_timeout: float) -> None:
+    """Use a normal write timeout without losing the short receive-poll timeout."""
+    ws.settimeout(OPENAI_REALTIME_SEND_TIMEOUT_SECONDS)
+    try:
+        ws.send(json.dumps(payload))
+    finally:
+        ws.settimeout(receive_timeout)
 
 
 def _drain_realtime_events_for_chunk_interval(

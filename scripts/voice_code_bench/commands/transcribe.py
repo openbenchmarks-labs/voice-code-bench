@@ -111,10 +111,20 @@ def transcribe_model(
     run_metadata = stt_run_metadata(model, evaluation_date, secrets)
     if datapoint_concurrency == 1:
         for datapoint in pending_datapoints:
-            row = transcribe_datapoint(dataset_root, datapoint, model, secrets, project_id)
+            try:
+                row = transcribe_datapoint(dataset_root, datapoint, model, secrets, project_id)
+            except Exception as exc:
+                if not _is_deadline_exceeded(exc):
+                    raise
+                row = _deadline_exceeded_row(datapoint["audio_id"])
+                print(
+                    f"skipped audio_id={datapoint['audio_id']} stt_model={model.id} reason=deadline_exceeded",
+                    flush=True,
+                )
             rows_by_audio_id[row["audio_id"]] = row
             write_transcript_rows(path, rows_by_audio_id, order, run_metadata)
-            print(f"transcribed audio_id={datapoint['audio_id']} stt_model={model.id}", flush=True)
+            if not row.get("metadata", {}).get("skipped"):
+                print(f"transcribed audio_id={datapoint['audio_id']} stt_model={model.id}", flush=True)
     else:
         with ThreadPoolExecutor(max_workers=datapoint_concurrency) as executor:
             futures = {
@@ -125,12 +135,37 @@ def transcribe_model(
             }
             for future in as_completed(futures):
                 audio_id = futures[future]
-                row = future.result()
+                try:
+                    row = future.result()
+                except Exception as exc:
+                    if not _is_deadline_exceeded(exc):
+                        raise
+                    row = _deadline_exceeded_row(audio_id)
+                    print(
+                        f"skipped audio_id={audio_id} stt_model={model.id} reason=deadline_exceeded",
+                        flush=True,
+                    )
                 rows_by_audio_id[row["audio_id"]] = row
                 write_transcript_rows(path, rows_by_audio_id, order, run_metadata)
-                print(f"transcribed audio_id={audio_id} stt_model={model.id}", flush=True)
+                if not row.get("metadata", {}).get("skipped"):
+                    print(f"transcribed audio_id={audio_id} stt_model={model.id}", flush=True)
     write_transcript_rows(path, rows_by_audio_id, order, run_metadata)
     return path
+
+
+def _is_deadline_exceeded(exc: Exception) -> bool:
+    return type(exc).__name__ == "DeadlineExceeded"
+
+
+def _deadline_exceeded_row(audio_id: str) -> TranscriptRow:
+    return {
+        "audio_id": audio_id,
+        "model_transcript": "",
+        "metadata": {
+            "skipped": True,
+            "skip_reason": "deadline_exceeded",
+        },
+    }
 
 
 def write_transcript_rows(

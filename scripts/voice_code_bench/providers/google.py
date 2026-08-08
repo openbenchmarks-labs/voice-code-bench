@@ -22,8 +22,11 @@ GOOGLE_STREAM_PCM_CHUNK_BYTES = int(
     * GOOGLE_STREAM_CHANNELS
     * GOOGLE_STREAM_CHUNK_DURATION_SECONDS
 )
-GOOGLE_STREAM_MIN_TIMEOUT_SECONDS = 300.0
-GOOGLE_STREAM_TIMEOUT_PADDING_SECONDS = 180.0
+GOOGLE_STREAM_MIN_TIMEOUT_SECONDS = 180.0
+GOOGLE_STREAM_TIMEOUT_PADDING_SECONDS = 90.0
+GOOGLE_STREAM_MAX_METADATA_BYTES = 64 * 1024
+GOOGLE_STREAM_RECOVERY_SEGMENT_SECONDS = 45.0
+GOOGLE_STREAM_FLUSH_SILENCE_SECONDS = 1.0
 
 
 def transcribe(
@@ -97,8 +100,9 @@ def _transcribe_streaming(
     project_id: str | None,
 ) -> TranscriptionResult:
     try:
-        from google.api_core.client_options import ClientOptions
+        from google.api_core.exceptions import DeadlineExceeded
         from google.cloud.speech_v2 import SpeechClient
+        from google.cloud.speech_v2.services.speech.transports.grpc import SpeechGrpcTransport
         from google.cloud.speech_v2.types import cloud_speech as cloud_speech_types
         from google.oauth2.credentials import Credentials
     except ImportError as exc:
@@ -107,20 +111,21 @@ def _transcribe_streaming(
     resolved_project_id = _resolve_project_id(secrets, project_id)
     region = str(stt_model.options.get("region", "us"))
     language_code = str(stt_model.options.get("language_code", "en-US"))
-    client = SpeechClient(
-        credentials=Credentials(token=_access_token()),
-        client_options=ClientOptions(api_endpoint=f"{region}-speech.googleapis.com"),
-    )
+    credentials = Credentials(token=_access_token())
+
+    def new_client() -> Any:
+        channel = SpeechGrpcTransport.create_channel(
+            f"{region}-speech.googleapis.com",
+            credentials=credentials,
+            options=google_stream_channel_options(),
+        )
+        return SpeechClient(transport=SpeechGrpcTransport(channel=channel))
+
+    client = new_client()
     audio_content = pcm16_audio_bytes(
         audio_path,
         sample_rate=GOOGLE_STREAM_SAMPLE_RATE_HZ,
         channels=GOOGLE_STREAM_CHANNELS,
-    )
-    audio_chunks = list(iter_audio_chunks(audio_content, GOOGLE_STREAM_PCM_CHUNK_BYTES))
-    audio_requests = _stream_audio_requests(
-        audio_chunks,
-        chunk_duration_seconds=GOOGLE_STREAM_CHUNK_DURATION_SECONDS,
-        cloud_speech_types=cloud_speech_types,
     )
     recognition_config = cloud_speech_types.RecognitionConfig(
         explicit_decoding_config=cloud_speech_types.ExplicitDecodingConfig(
@@ -131,23 +136,132 @@ def _transcribe_streaming(
         language_codes=[language_code],
         model=stt_model.model,
     )
-    streaming_config = cloud_speech_types.StreamingRecognitionConfig(config=recognition_config)
-    config_request = cloud_speech_types.StreamingRecognizeRequest(
-        recognizer=f"projects/{resolved_project_id}/locations/{region}/recognizers/_",
-        streaming_config=streaming_config,
+    streaming_config = cloud_speech_types.StreamingRecognitionConfig(
+        config=recognition_config,
+        streaming_features=cloud_speech_types.StreamingRecognitionFeatures(interim_results=True),
     )
+    recognizer = f"projects/{resolved_project_id}/locations/{region}/recognizers/_"
+    try:
+        transcripts = _recognize_streaming_content(
+            client,
+            audio_content,
+            recognizer=recognizer,
+            streaming_config=streaming_config,
+            cloud_speech_types=cloud_speech_types,
+            timeout=_stream_timeout_seconds(audio_path),
+        )
+    except DeadlineExceeded:
+        client.transport.close()
+        transcripts = []
+        for segment in _split_pcm_audio(
+            audio_content,
+            sample_rate=GOOGLE_STREAM_SAMPLE_RATE_HZ,
+            channels=GOOGLE_STREAM_CHANNELS,
+            segment_seconds=GOOGLE_STREAM_RECOVERY_SEGMENT_SECONDS,
+        ):
+            recovery_client = new_client()
+            try:
+                transcripts.extend(
+                    _recognize_streaming_content(
+                        recovery_client,
+                        segment,
+                        recognizer=recognizer,
+                        streaming_config=streaming_config,
+                        cloud_speech_types=cloud_speech_types,
+                        timeout=GOOGLE_STREAM_MIN_TIMEOUT_SECONDS,
+                    )
+                )
+            finally:
+                recovery_client.transport.close()
+    else:
+        client.transport.close()
+    return {"transcript": " ".join(item for item in transcripts if item)}
+
+
+def _recognize_streaming_content(
+    client: Any,
+    audio_content: bytes,
+    *,
+    recognizer: str,
+    streaming_config: Any,
+    cloud_speech_types: Any,
+    timeout: float,
+) -> list[str]:
+    audio_content = _append_pcm_silence(
+        audio_content,
+        sample_rate=GOOGLE_STREAM_SAMPLE_RATE_HZ,
+        channels=GOOGLE_STREAM_CHANNELS,
+        silence_seconds=GOOGLE_STREAM_FLUSH_SILENCE_SECONDS,
+    )
+    audio_chunks = list(iter_audio_chunks(audio_content, GOOGLE_STREAM_PCM_CHUNK_BYTES))
 
     def requests() -> Any:
-        yield config_request
-        yield from audio_requests
+        yield cloud_speech_types.StreamingRecognizeRequest(
+            recognizer=recognizer,
+            streaming_config=streaming_config,
+        )
+        yield from _stream_audio_requests(
+            audio_chunks,
+            chunk_duration_seconds=GOOGLE_STREAM_CHUNK_DURATION_SECONDS,
+            cloud_speech_types=cloud_speech_types,
+        )
 
+    responses = client.streaming_recognize(requests=requests(), timeout=timeout)
+    return _streaming_response_transcripts(responses)
+
+
+def _append_pcm_silence(
+    audio_content: bytes,
+    *,
+    sample_rate: int,
+    channels: int,
+    silence_seconds: float,
+) -> bytes:
+    silence_frames = max(0, int(sample_rate * silence_seconds))
+    return audio_content + bytes(silence_frames * channels * 2)
+
+
+def _streaming_response_transcripts(responses: Any) -> list[str]:
     transcripts: list[str] = []
-    for response in client.streaming_recognize(requests=requests(), timeout=_stream_timeout_seconds(audio_path)):
+    pending_interim = ""
+    for response in responses:
         for result in response.results:
             alternatives = result.alternatives
-            if alternatives and alternatives[0].transcript:
-                transcripts.append(alternatives[0].transcript.strip())
-    return {"transcript": " ".join(item for item in transcripts if item)}
+            if not alternatives or not alternatives[0].transcript:
+                continue
+            transcript = alternatives[0].transcript.strip()
+            if result.is_final:
+                transcripts.append(transcript)
+                pending_interim = ""
+            else:
+                pending_interim = transcript
+    if pending_interim:
+        transcripts.append(pending_interim)
+    return transcripts
+
+
+def _split_pcm_audio(
+    audio_content: bytes,
+    *,
+    sample_rate: int,
+    channels: int,
+    segment_seconds: float,
+) -> list[bytes]:
+    bytes_per_frame = 2 * channels
+    segment_frames = max(1, int(sample_rate * segment_seconds))
+    segment_bytes = segment_frames * bytes_per_frame
+    return [
+        audio_content[offset : offset + segment_bytes]
+        for offset in range(0, len(audio_content), segment_bytes)
+    ]
+
+
+def google_stream_channel_options() -> list[tuple[str, int]]:
+    return [
+        ("grpc.max_send_message_length", -1),
+        ("grpc.max_receive_message_length", -1),
+        ("grpc.max_metadata_size", GOOGLE_STREAM_MAX_METADATA_BYTES),
+    ]
 
 
 def _stream_audio_requests(

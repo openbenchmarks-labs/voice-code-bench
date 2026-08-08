@@ -271,45 +271,40 @@ vcb-run \
   --output-dir runs/full-local
 ```
 
-### Discounted OpenAI Batch entity verification
+### Grouped OpenAI entity verification
 
-`vcb-run` and `vcb-extract-entities` keep using the synchronous, one-datapoint
-GPT-5.5 verifier. For a new run, entity verification can instead be performed
-with the opt-in `openai_gpt_5_6_sol_batch10_v1` verifier. It uses OpenAI's
-asynchronous Batch API, groups exactly 10 benchmark datapoints into each Chat
-Completions request, and fixes `reasoning_effort` to `medium`. These settings
-are part of the versioned verifier digest.
+For a new run, use the opt-in `openai_gpt_5_6_sol_group10_sync_v1` verifier.
+It uses normal OpenAI Chat Completions calls with `gpt-5.6-sol`, groups 10
+benchmark datapoints into each request, fixes `reasoning_effort` to `medium`,
+and runs at a global request concurrency of 4. These settings are part of the
+versioned verifier digest.
 
 First produce complete `transcripts.json` files under one run directory. Then
-plan and run verification:
+run entity verification directly:
 
 ```bash
-vcb-batch-verify --run-dir runs/full --plan \
-  --verifier-id openai_gpt_5_6_sol_batch10_v1 \
-  --secret-path scripts/.secret
-
-vcb-batch-verify --run-dir runs/full --run \
-  --secret-path scripts/.secret --interval 60 --max-in-flight 4
+vcb-extract-entities \
+  --dataset-root . \
+  --transcripts-dir runs/full \
+  --output-dir runs/full \
+  --verifier-id openai_gpt_5_6_sol_group10_sync_v1 \
+  --secret-path scripts/.secret \
+  --concurrency 4 \
+  --resume
 ```
 
-The plan, uploaded-file IDs, Batch IDs, retained request/output JSONL, retries,
-unresolved datapoints, and token usage are stored under
-`runs/full/verifier-batches/openai_gpt_5_6_sol_batch10_v1/`. The run is safe to
-interrupt and resume. A failed, expired, cancelled, malformed, or incomplete
-attempt retries only unresolved datapoints, up to three attempts. HTTP 429
-capacity responses are deferred and do not consume an attempt.
+Concurrency is global across all STT models, so this command issues no more
+than four OpenAI requests at once. Each completed group is checkpointed into
+its model's `entity_matches.json`. The command is safe to interrupt and rerun
+with `--resume`; already checkpointed datapoints are not requested again.
+Malformed or terminally failed grouped responses are retried up to three
+times, in addition to the HTTP client's transient-error retries.
 
-Inspect or advance a run without entering the polling loop:
+This synchronous path uses standard API pricing and does not receive the Batch
+API's discount. The older asynchronous workflow remains available through
+`vcb-batch-verify` with the `openai_gpt_5_6_sol_batch10_v1` verifier.
 
-```bash
-vcb-batch-verify --run-dir runs/full --status
-vcb-batch-verify --run-dir runs/full --reconcile --secret-path scripts/.secret
-vcb-batch-verify --run-dir runs/full --validate
-```
-
-Validation is all-or-nothing: every selected transcript must have exactly one
-valid entity result and its source/configuration digests must still match.
-Only then score the generated `entity_matches.json` files:
+After verification finishes, score the generated `entity_matches.json` files:
 
 ```bash
 vcb-score-entities \
@@ -324,10 +319,6 @@ vcb-score-wer \
   --transcripts-dir runs/full \
   --output-dir runs/full/scores
 ```
-
-OpenAI advertises Batch pricing at a discount to synchronous requests, but the
-CLI intentionally reports token usage rather than embedding dollar prices,
-which can change. Check current OpenAI pricing before submission.
 
 ### Inworld STT 1
 

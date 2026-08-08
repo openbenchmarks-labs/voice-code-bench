@@ -10,10 +10,12 @@ from voice_code_bench.models import DEFAULT_VERIFIER_ID
 from voice_code_bench import verifier
 from voice_code_bench.verifier import (
     VerifierCache,
+    build_grouped_verify_request,
     build_openai_verify_request,
     load_verifier_config,
     parse_llm_entity_matches,
     verify_entity_matches,
+    verify_grouped_entity_matches,
 )
 
 
@@ -70,6 +72,42 @@ class VerifierTests(unittest.TestCase):
         config = replace(load_verifier_config(DEFAULT_VERIFIER_ID), model="gpt-4.1")
         request = build_openai_verify_request(config, sample_datapoint(), "send a@example.com")
         self.assertEqual(request["temperature"], 0)
+
+    def test_grouped_sync_config_and_request(self) -> None:
+        config = load_verifier_config("openai_gpt_5_6_sol_group10_sync_v1")
+        request = build_grouped_verify_request(
+            config,
+            [{"datapoint_id": "sample_001", "target_entities": [], "transcript": "hello"}],
+        )
+
+        self.assertEqual(config.transport, "sync")
+        self.assertEqual(config.datapoints_per_request, 10)
+        self.assertEqual(request["model"], "gpt-5.6-sol")
+        self.assertEqual(request["reasoning_effort"], "medium")
+        self.assertIn('"datapoints"', request["messages"][1]["content"])
+
+    def test_grouped_sync_retries_malformed_response(self) -> None:
+        config = load_verifier_config("openai_gpt_5_6_sol_group10_sync_v1")
+        datapoint = sample_datapoint()
+        transcript_row = {"audio_id": datapoint["audio_id"], "model_transcript": "send a@example.com"}
+        calls = 0
+
+        def fake_call(*_args: Any, **_kwargs: Any) -> dict[str, Any]:
+            nonlocal calls
+            calls += 1
+            if calls == 1:
+                return {"datapoints": []}
+            return {"datapoints": [{"datapoint_id": datapoint["audio_id"], **sample_response()}]}
+
+        original_call = verifier.call_grouped_openai_verifier
+        verifier.call_grouped_openai_verifier = fake_call
+        try:
+            matches = verify_grouped_entity_matches([datapoint], [transcript_row], config, {})
+        finally:
+            verifier.call_grouped_openai_verifier = original_call
+
+        self.assertEqual(calls, 2)
+        self.assertTrue(matches[datapoint["audio_id"]][0]["present"])
 
     def test_parse_llm_entity_matches_validates_required_invariants(self) -> None:
         self.assertEqual(

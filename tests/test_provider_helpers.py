@@ -32,6 +32,12 @@ from voice_code_bench.providers.inworld import (
     inworld_streaming_transcript_from_events,
     inworld_transcript_from_response,
 )
+from voice_code_bench.providers.google import (
+    _append_pcm_silence,
+    _split_pcm_audio,
+    _streaming_response_transcripts,
+    google_stream_channel_options,
+)
 from voice_code_bench.providers.modal import (
     MODAL_ENDPOINT_DESCRIPTION,
     modal_chat_completions_endpoint,
@@ -44,7 +50,7 @@ from voice_code_bench.providers.modal_asr import (
     modal_asr_payload,
     modal_asr_transcript_from_response,
 )
-from voice_code_bench.providers.openai import order_realtime_item_ids
+from voice_code_bench.providers.openai import _send_realtime_event, order_realtime_item_ids
 from voice_code_bench.runner import transcribe_datapoint
 
 
@@ -71,6 +77,65 @@ class FakeProviderAdapter:
 
     def request_model(self, stt_model: SttModelConfig, secrets: dict[str, str] | None = None) -> str:
         return f"request:{stt_model.model}"
+
+
+class OpenAIRealtimeHelpersTest(unittest.TestCase):
+    def test_send_uses_write_timeout_then_restores_receive_timeout(self) -> None:
+        ws = mock.Mock()
+
+        _send_realtime_event(ws, {"type": "test"}, 0.02)
+
+        self.assertEqual(ws.settimeout.call_args_list, [mock.call(120.0), mock.call(0.02)])
+        ws.send.assert_called_once_with('{"type": "test"}')
+
+
+class GoogleStreamingHelpersTest(unittest.TestCase):
+    def test_channel_allows_large_error_metadata(self) -> None:
+        self.assertIn(("grpc.max_metadata_size", 64 * 1024), google_stream_channel_options())
+
+    def test_recovery_segments_preserve_all_pcm_bytes(self) -> None:
+        audio = bytes(range(24))
+
+        segments = _split_pcm_audio(
+            audio,
+            sample_rate=2,
+            channels=1,
+            segment_seconds=2.0,
+        )
+
+        self.assertEqual([len(segment) for segment in segments], [8, 8, 8])
+        self.assertEqual(b"".join(segments), audio)
+
+    def test_interim_streaming_results_do_not_duplicate_text(self) -> None:
+        def result(transcript: str, *, is_final: bool) -> mock.Mock:
+            return mock.Mock(
+                alternatives=[mock.Mock(transcript=transcript)],
+                is_final=is_final,
+            )
+
+        responses = [
+            mock.Mock(results=[result("hello", is_final=False)]),
+            mock.Mock(results=[result("hello world", is_final=False)]),
+            mock.Mock(results=[result("hello world", is_final=True)]),
+            mock.Mock(results=[result("next phrase", is_final=False)]),
+        ]
+
+        self.assertEqual(
+            _streaming_response_transcripts(responses),
+            ["hello world", "next phrase"],
+        )
+
+    def test_flush_silence_is_pcm16_at_the_requested_rate(self) -> None:
+        audio = b"\x01\x02\x03\x04"
+
+        flushed = _append_pcm_silence(
+            audio,
+            sample_rate=4,
+            channels=1,
+            silence_seconds=0.5,
+        )
+
+        self.assertEqual(flushed, audio + bytes(4))
 
 
 OMNIASR_CHECKSUM_OPTIONS = {
