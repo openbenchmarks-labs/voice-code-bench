@@ -229,9 +229,11 @@ python -m pytest
 
 This creates `.venv` if needed, installs the package in editable mode with the
 `figures` extra, validates metadata, scores the released baseline
-transcripts/entity matches, rewrites `baselines/results.csv`, and regenerates
-`paper/figures/wer_entity_scatter.pdf` from the frozen 12-model paper baseline
-set. Post-publication baselines such as Inkling and Parakeet are excluded from that figure.
+transcripts/entity matches into `baselines/scores/results.csv`, and regenerates
+`paper/figures/wer_entity_scatter.pdf` from `paper/figure_results.csv`. The frozen
+CSV contains the 12 paper models' WER, CTEM, and TSR values, reproduced with the
+scoring code, metadata, and released predictions at commit
+`76ad14f9c9c0c19f4a885037f64adae45f7ed9f1`.
 
 To generate the current benchmark figure with every row in
 `baselines/results.csv`, run:
@@ -241,8 +243,8 @@ vcb-make-figures --model-set all
 ```
 
 This writes `baselines/figures/wer_entity_scatter.pdf` by default. Use
-`--model-set paper` to regenerate only the frozen paper figure, or `--output` to
-choose another path.
+`--model-set paper` to regenerate the frozen paper figure. Use `--results` to
+choose an input CSV or `--output` to choose an output path.
 
 To rebuild the paper PDF:
 
