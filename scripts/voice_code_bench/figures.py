@@ -9,6 +9,7 @@ from pathlib import Path
 SHORT_MODEL_LABELS = {
     "Amazon Transcribe": "Amazon\nTranscribe",
     "AssemblyAI Universal-3 Pro": "AssemblyAI\nUniversal-3\nPro",
+    "AssemblyAI Universal-3.5 Pro": "AssemblyAI\nUniversal-3.5\nPro",
     "Deepgram Nova-3": "Deepgram\nNova-3",
     "ElevenLabs Scribe v2": "ElevenLabs\nScribe v2",
     "Inworld STT 1": "Inworld\nSTT 1",
@@ -20,6 +21,7 @@ SHORT_MODEL_LABELS = {
 MODEL_LABELS = {
     "amazon_transcribe_streaming": ("Amazon Transcribe", "Streaming"),
     "assemblyai_universal_3_pro": ("AssemblyAI Universal-3 Pro", "Batch"),
+    "assemblyai_universal_3_5_pro": ("AssemblyAI Universal-3.5 Pro", "Batch"),
     "assemblyai_universal_3_pro_streaming": ("AssemblyAI Universal-3 Pro", "Streaming"),
     "deepgram_nova3": ("Deepgram Nova-3", "Batch"),
     "deepgram_nova3_streaming": ("Deepgram Nova-3", "Streaming"),
@@ -63,7 +65,12 @@ EXTRA_PANEL_LABELS = {
 def parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Generate benchmark figures from baseline result artifacts.")
     parser.add_argument("--dataset-root", type=Path, default=Path.cwd())
-    parser.add_argument("--results", type=Path, default=None, help="Defaults to baselines/results.csv under --dataset-root.")
+    parser.add_argument(
+        "--results",
+        type=Path,
+        default=None,
+        help="Defaults to paper/figure_results.csv for paper or baselines/results.csv for all.",
+    )
     parser.add_argument(
         "--model-set",
         choices=MODEL_SETS,
@@ -82,7 +89,8 @@ def parser() -> argparse.ArgumentParser:
 def main(argv: list[str] | None = None) -> None:
     args = parser().parse_args(argv)
     dataset_root = args.dataset_root.resolve()
-    results_path = args.results or dataset_root / "baselines" / "results.csv"
+    default_results = "paper/figure_results.csv" if args.model_set == "paper" else "baselines/results.csv"
+    results_path = args.results or dataset_root / default_results
     output_path = args.output or default_output_path(dataset_root, args.model_set)
     write_wer_entity_scatter(results_path, output_path, dataset_root=dataset_root, model_set=args.model_set)
 

@@ -15,6 +15,7 @@ fi
 "$PYTHON_BIN" -c "from pathlib import Path; from voice_code_bench.io import read_metadata; print(f'metadata rows: {len(read_metadata(Path(\"$ROOT/data/metadata.jsonl\")))}')"
 
 mkdir -p "$ROOT/baselines/scores/entities" "$ROOT/baselines/scores/wer"
+REPRODUCED_RESULTS="$ROOT/baselines/scores/results.csv"
 
 "$VENV_DIR/bin/vcb-score-entities" \
   --dataset-root "$ROOT" \
@@ -22,7 +23,7 @@ mkdir -p "$ROOT/baselines/scores/entities" "$ROOT/baselines/scores/wer"
   --entity-matches-dir "$ROOT/baselines/predictions" \
   --output-dir "$ROOT/baselines" \
   --scores-dir "$ROOT/baselines/scores/entities" \
-  --output-csv "$ROOT/baselines/results.csv"
+  --output-csv "$REPRODUCED_RESULTS"
 
 "$VENV_DIR/bin/vcb-score-wer" \
   --dataset-root "$ROOT" \
@@ -30,8 +31,8 @@ mkdir -p "$ROOT/baselines/scores/entities" "$ROOT/baselines/scores/wer"
   --transcripts-dir "$ROOT/baselines/predictions" \
   --output-dir "$ROOT/baselines" \
   --scores-dir "$ROOT/baselines/scores/wer" \
-  --output-csv "$ROOT/baselines/results.csv"
+  --output-csv "$REPRODUCED_RESULTS"
 
 "$VENV_DIR/bin/vcb-make-paper-figures" --dataset-root "$ROOT" --model-set paper
 
-echo "Reproduced baselines/results.csv and paper/figures/wer_entity_scatter.pdf"
+echo "Reproduced baselines/scores/results.csv and paper/figures/wer_entity_scatter.pdf"
