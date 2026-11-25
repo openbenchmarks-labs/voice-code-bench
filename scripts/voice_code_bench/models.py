@@ -323,6 +323,39 @@ STT_MODELS = [
         },
         mode=SttMode.STREAM,
     ),
+    SttModelConfig(
+        id="oruk_fourier_2b",
+        provider="oruk",
+        model="oruk-fourier-2b",
+        options={
+            "language": "en",
+            "upstream_model_id": "oruk/oruk-fourier-2b",
+            "upstream_model_revision": "8c2a8871f1304aa2f634da4fb95e24438c4945b9",
+        },
+        mode=SttMode.BATCH,
+    ),
+    SttModelConfig(
+        id="modal_oruk_fourier_2b",
+        provider="modal",
+        model="oruk/oruk-fourier-2b",
+        options={
+            "sample_rate": 16000,
+            "channels": 1,
+            "audio_format": "wav",
+            "language": "English",
+            "upstream_model_revision": "8c2a8871f1304aa2f634da4fb95e24438c4945b9",
+            "modal_app": "voice-code-bench-oruk-fourier-2b",
+            "modal_gpu": "L40S",
+            "runtime": "transformers",
+            "runtime_revision": ">=5.24.0",
+            "decode_mode": "published",
+            "num_beams": 3,
+            "max_new_tokens": 1024,
+            "max_attempts": 10,
+            "timeout_seconds": 600.0,
+        },
+        mode=SttMode.BATCH,
+    ),
 ]
 
 STT_MODEL_IDS = [model.id for model in STT_MODELS]

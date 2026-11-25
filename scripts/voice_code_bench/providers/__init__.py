@@ -6,7 +6,7 @@ from typing import Any
 
 from ..io import require_secret, secret_value
 from ..models import ProviderAdapter, SttMode, SttModelConfig, TranscriptionResult
-from . import amazon, assemblyai, deepgram, elevenlabs, google, groq, inworld, modal, modal_asr, openai
+from . import amazon, assemblyai, deepgram, elevenlabs, google, groq, inworld, modal, modal_asr, openai, oruk
 
 
 @dataclass(frozen=True)
@@ -129,6 +129,15 @@ class _ModalProviderAdapter:
                 require_secret(secrets, "MODAL_PROXY_TOKEN_SECRET"),
                 endpoint_secret_name="MODAL_OMNIASR_ENDPOINT",
             )
+        if stt_model.id == "modal_oruk_fourier_2b":
+            return modal_asr.transcribe(
+                audio_path,
+                stt_model,
+                require_secret(secrets, "MODAL_ORUK_FOURIER_2B_ENDPOINT"),
+                require_secret(secrets, "MODAL_PROXY_TOKEN_ID"),
+                require_secret(secrets, "MODAL_PROXY_TOKEN_SECRET"),
+                endpoint_secret_name="MODAL_ORUK_FOURIER_2B_ENDPOINT",
+            )
         raise ValueError(f"Unsupported Modal model ID: {stt_model.id}")
 
     def endpoint_or_api(
@@ -151,6 +160,11 @@ class _ModalProviderAdapter:
             if endpoint is None:
                 return modal_asr.MODAL_ASR_ENDPOINT_DESCRIPTION_BY_SECRET["MODAL_OMNIASR_ENDPOINT"]
             return modal_asr.modal_asr_endpoint(endpoint, "MODAL_OMNIASR_ENDPOINT")
+        if stt_model.id == "modal_oruk_fourier_2b":
+            endpoint = secret_value(secrets or {}, "MODAL_ORUK_FOURIER_2B_ENDPOINT")
+            if endpoint is None:
+                return modal_asr.MODAL_ASR_ENDPOINT_DESCRIPTION_BY_SECRET["MODAL_ORUK_FOURIER_2B_ENDPOINT"]
+            return modal_asr.modal_asr_endpoint(endpoint, "MODAL_ORUK_FOURIER_2B_ENDPOINT")
         raise ValueError(f"Unsupported Modal model ID: {stt_model.id}")
 
     def request_model(self, stt_model: SttModelConfig, secrets: dict[str, str] | None = None) -> str:
@@ -203,6 +217,11 @@ PROVIDER_REGISTRY: dict[str, ProviderAdapter] = {
         secret_name="INWORLD_API_KEY",
         batch_endpoint="https://api.inworld.ai/stt/v1/transcribe",
         streaming_endpoint="wss://api.inworld.ai/stt/v1/transcribe:streamBidirectional",
+    ),
+    "oruk": _ApiKeyProviderAdapter(
+        module=oruk,
+        secret_name="ORUK_API_KEY",
+        batch_endpoint=oruk.ORUK_TRANSCRIPTIONS_ENDPOINT,
     ),
 }
 

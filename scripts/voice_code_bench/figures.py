@@ -15,6 +15,8 @@ SHORT_MODEL_LABELS = {
     "Thinking Machines Inkling-NVFP4 via Modal (effort=max)": "Inkling-NVFP4\nvia Modal\n(effort=max)",
     "NVIDIA Parakeet TDT 0.6B v3 via Modal": "NVIDIA Parakeet\nTDT 0.6B v3\nvia Modal",
     "Meta OmniASR LLM Unlimited 7B v2 via Modal": "Meta OmniASR\nUnlimited 7B v2\nvia Modal",
+    "Oruk Fourier-2B": "Oruk\nFourier-2B",
+    "Oruk Fourier-2B via Modal": "Oruk\nFourier-2B\nvia Modal",
 }
 
 MODEL_LABELS = {
@@ -32,8 +34,10 @@ MODEL_LABELS = {
     "modal_inkling": ("Thinking Machines Inkling-NVFP4 via Modal (effort=max)", "Batch"),
     "modal_meta_omniasr_llm_unlimited_7b_v2": ("Meta OmniASR LLM Unlimited 7B v2 via Modal", "Batch"),
     "modal_nvidia_parakeet_tdt_0_6b_v3": ("NVIDIA Parakeet TDT 0.6B v3 via Modal", "Batch"),
+    "modal_oruk_fourier_2b": ("Oruk Fourier-2B via Modal", "Batch"),
     "openai_gpt_4o_transcribe": ("OpenAI gpt-4o-transcribe", "Batch"),
     "openai_gpt_realtime_whisper_streaming": ("OpenAI gpt-realtime-whisper", "Streaming"),
+    "oruk_fourier_2b": ("Oruk Fourier-2B", "Batch"),
     "whisper_large_v3": ("Whisper large-v3", "Batch"),
 }
 
