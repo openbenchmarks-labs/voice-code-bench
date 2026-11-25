@@ -913,6 +913,66 @@ class ProviderHelperTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "Unsupported Modal model ID: modal_unknown"):
             providers.transcribe(Path("audio.wav"), model, {}, None)
 
+    def test_oruk_fourier_2b_hosted_provider_and_metadata(self) -> None:
+        selected = selected_stt_models("oruk_fourier_2b")
+        self.assertEqual([model.id for model in selected], ["oruk_fourier_2b"])
+        model = selected[0]
+        self.assertEqual(model.mode, SttMode.BATCH)
+        self.assertEqual(stt_endpoint_or_api(model), "https://speech-api.oruk.ai/v1/audio/transcriptions")
+        self.assertEqual(stt_request_model(model), "oruk-fourier-2b")
+        meta = stt_run_metadata(model, "2026-11-25")
+        self.assertEqual(meta["provider"], "oruk")
+        self.assertEqual(meta["model"], "oruk-fourier-2b")
+        self.assertEqual(meta["inference_settings"]["upstream_model_id"], "oruk/oruk-fourier-2b")
+        self.assertEqual(
+            meta["inference_settings"]["upstream_model_revision"],
+            "8c2a8871f1304aa2f634da4fb95e24438c4945b9",
+        )
+        with mock.patch(
+            "voice_code_bench.providers.oruk.post_multipart_json",
+            return_value={"text": "hello world"},
+        ) as post_fn:
+            result = providers.transcribe(Path("audio.wav"), model, {"ORUK_API_KEY": "test-key"}, None)
+        self.assertEqual(result, {"transcript": "hello world"})
+        post_fn.assert_called_once_with(
+            "https://speech-api.oruk.ai/v1/audio/transcriptions",
+            {"model": "oruk-fourier-2b", "response_format": "json", "language": "en"},
+            "file",
+            Path("audio.wav"),
+            {"Authorization": "Bearer test-key"},
+            file_content_type="audio/wav",
+            timeout=300.0,
+        )
+
+    def test_modal_oruk_fourier_2b_delegation_and_metadata(self) -> None:
+        selected = selected_stt_models("modal_oruk_fourier_2b")
+        self.assertEqual([model.id for model in selected], ["modal_oruk_fourier_2b"])
+        model = selected[0]
+        self.assertEqual(
+            stt_endpoint_or_api(model),
+            MODAL_ASR_ENDPOINT_DESCRIPTION_BY_SECRET["MODAL_ORUK_FOURIER_2B_ENDPOINT"],
+        )
+        with mock.patch("voice_code_bench.providers.modal_asr.transcribe", return_value={"transcript": "ok"}) as transcribe:
+            result = providers.transcribe(
+                Path("audio.wav"),
+                model,
+                {
+                    "MODAL_ORUK_FOURIER_2B_ENDPOINT": "https://example--fourier2b.modal.run",
+                    "MODAL_PROXY_TOKEN_ID": "wk-token-id",
+                    "MODAL_PROXY_TOKEN_SECRET": "ws-token-secret",
+                },
+                None,
+            )
+        self.assertEqual(result, {"transcript": "ok"})
+        transcribe.assert_called_once_with(
+            Path("audio.wav"),
+            model,
+            "https://example--fourier2b.modal.run",
+            "wk-token-id",
+            "ws-token-secret",
+            endpoint_secret_name="MODAL_ORUK_FOURIER_2B_ENDPOINT",
+        )
+
     def test_registry_adapter_metadata_methods_are_used(self) -> None:
         adapter = FakeProviderAdapter()
         model = SttModelConfig(
